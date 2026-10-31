@@ -1,0 +1,52 @@
+# C / C++ Object files & Static/Shared Libraries
+*.o
+*.obj
+*.a
+*.so
+*.dylib
+
+# Compiled Executables
+lsm_bench
+lsm_cli
+crash_child
+crash_runner
+test_all
+
+# Build Directories (CMake / Make)
+build/
+build_*/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile.cmake
+Testing/
+compile_commands.json
+
+# Ephemeral runtime database folders created during CLI or benchmarks
+my_test_db/
+demo_db/
+bench_db*/
+crash_test_db*/
+*crash_db*/
+*_db/
+
+# Python Cache & Virtual Environments
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# IDE / Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Operating System Metadata
+.DS_Store
+Thumbs.db
