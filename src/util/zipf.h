@@ -55,6 +55,7 @@ class WorkloadGenerator {
   WorkloadConfig config_;
   uint32_t thread_id_;
   uint64_t state_;
+  std::vector<double> cdf_;
 };
 
 }  // namespace lsm

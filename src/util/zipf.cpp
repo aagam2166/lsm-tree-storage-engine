@@ -23,15 +23,31 @@ uint64_t Mix(uint64_t x) {
 }  // namespace
 
 WorkloadGenerator::WorkloadGenerator(const WorkloadConfig& config, uint32_t thread_id)
-    : config_(config), thread_id_(thread_id), state_(Mix(config.base_seed + thread_id + 0x9E3779B97F4A7C15ULL)) {}
+    : config_(config), thread_id_(thread_id), state_(Mix(config.base_seed + thread_id + 0x9E3779B97F4A7C15ULL)) {
+  if (config_.distribution == KeyDistribution::ZIPFIAN && config_.num_keys > 0) {
+    cdf_.resize(config_.num_keys);
+    const double s = std::max(0.0, config_.zipf_exponent);
+    double sum = 0.0;
+    for (std::size_t i = 1; i <= config_.num_keys; ++i) {
+      sum += 1.0 / std::pow(static_cast<double>(i), s);
+      cdf_[i - 1] = sum;
+    }
+    if (sum > 0.0) {
+      for (double& v : cdf_) {
+        v /= sum;
+      }
+      cdf_.back() = 1.0;
+    }
+  }
+}
 
 WorkloadOp WorkloadGenerator::NextOp() {
   WorkloadOp op;
   const std::size_t key_rank = config_.distribution == KeyDistribution::ZIPFIAN
                                  ? GenerateZipfRank()
                                  : GenerateUniformRank();
-  op.key = std::to_string(key_rank);
-  op.value = std::string(32, 'x');
+  op.key = FormatFixedKey(key_rank);
+  op.value = std::string(100, 'x');
   op.type = (state_ % 100 < static_cast<uint64_t>(config_.write_ratio * 100.0))
                 ? WorkloadOpType::kPut
                 : WorkloadOpType::kGet;
@@ -40,28 +56,13 @@ WorkloadOp WorkloadGenerator::NextOp() {
 }
 
 std::size_t WorkloadGenerator::GenerateZipfRank() const {
-  if (config_.num_keys == 0) return 0;
-  const std::size_t n = config_.num_keys;
-  const double s = std::max(0.0, config_.zipf_exponent);
+  if (cdf_.empty()) return 0;
   std::mt19937_64 rng(state_ ^ (thread_id_ * 0x9E3779B97F4A7C15ULL));
   std::uniform_real_distribution<double> dist(0.0, 1.0);
   const double u = dist(rng);
-  double denom = 0.0;
-  for (std::size_t i = 1; i <= n; ++i) {
-    denom += 1.0 / std::pow(static_cast<double>(i), s);
-  }
-  if (denom == 0.0) return 0;
-  double target = u * denom;
-  std::size_t rank = 0;
-  double sum = 0.0;
-  for (std::size_t i = 1; i <= n; ++i) {
-    sum += 1.0 / std::pow(static_cast<double>(i), s);
-    if (target <= sum) {
-      rank = i - 1;
-      break;
-    }
-  }
-  if (rank >= n) rank = n - 1;
+  auto it = std::lower_bound(cdf_.begin(), cdf_.end(), u);
+  std::size_t rank = std::distance(cdf_.begin(), it);
+  if (rank >= cdf_.size()) rank = cdf_.size() - 1;
   return rank;
 }
 
@@ -99,14 +100,16 @@ std::vector<RankProbabilityRow> WorkloadGenerator::MeasureRankProbabilities(
         break;
       }
     }
-    if (rank < num_keys) ++counts[rank];
+    counts[rank]++;
   }
 
+  const double inv_samples = 1.0 / static_cast<double>(num_samples);
+  const double uniform_prob = 1.0 / static_cast<double>(num_keys);
   for (std::size_t r = 0; r < std::min(top_ranks, num_keys); ++r) {
     RankProbabilityRow row;
-    row.rank = r;
-    row.zipf_measured = static_cast<double>(counts[r]) / static_cast<double>(num_samples);
-    row.uniform_measured = 1.0 / static_cast<double>(num_keys);
+    row.rank = r + 1;
+    row.zipf_measured = static_cast<double>(counts[r]) * inv_samples;
+    row.uniform_measured = uniform_prob;
     rows.push_back(row);
   }
   return rows;
@@ -116,14 +119,25 @@ std::string WorkloadGenerator::FormatSlide3Table(
     const std::vector<RankProbabilityRow>& rows,
     const std::string& output_path) {
   std::ostringstream oss;
-  oss << "rank,zipf_measured,uniform_measured\n";
-  for (const auto& row : rows) {
-    oss << row.rank << "," << std::fixed << std::setprecision(6)
-        << row.zipf_measured << "," << row.uniform_measured << "\n";
+  oss << "| Rank | Zipfian Measured | Zipfian Target (Slide 3) | Uniform Measured | Uniform Target (Slide 3) |\n";
+  oss << "|-----:|-----------------:|-------------------------:|-----------------:|-------------------------:|\n";
+  const double targets[5] = {0.134, 0.067, 0.045, 0.033, 0.027};
+  for (std::size_t i = 0; i < rows.size() && i < 5; ++i) {
+    oss << "| " << rows[i].rank << " | "
+        << std::fixed << std::setprecision(3) << rows[i].zipf_measured << " | "
+        << targets[i] << " | "
+        << rows[i].uniform_measured << " | 0.001 |\n";
   }
+
   if (!output_path.empty()) {
-    std::ofstream out(output_path, std::ios::trunc);
-    if (out.is_open()) out << oss.str();
+    std::ofstream out(output_path);
+    if (out.is_open()) {
+      out << "rank,zipf_measured,zipf_target,uniform_measured,uniform_target\n";
+      for (std::size_t i = 0; i < rows.size() && i < 5; ++i) {
+        out << rows[i].rank << "," << rows[i].zipf_measured << "," << targets[i]
+            << "," << rows[i].uniform_measured << ",0.001\n";
+      }
+    }
   }
   return oss.str();
 }
